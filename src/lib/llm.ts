@@ -3,9 +3,14 @@ import {
   StoryRequest,
   StoryResponse,
   StoryTurn,
+  advanceProfileTime,
   createMockStoryResponse,
 } from "./game";
-import { HISTORICAL_CONTEXT, describePlace } from "./threeKingdoms";
+import {
+  HISTORICAL_CONTEXT,
+  describePlace,
+  getFactionForYearAndPlace,
+} from "./threeKingdoms";
 
 type LlmMessage = {
   role: "system" | "user";
@@ -24,7 +29,7 @@ type LlmStoryPayload = {
   title: string;
   narrative: string;
   historicalContext: string;
-  ageDelta: number;
+  timeDeltaDays: number;
   currentLocation?: string;
   relationships?: string[];
   traits?: string[];
@@ -70,11 +75,11 @@ JSON 格式：
   "title": "不超过12字的节点标题",
   "narrative": "180到360字剧情",
   "historicalContext": "80到180字历史地理背景",
-  "ageDelta": 1,
+  "timeDeltaDays": 3,
   "currentLocation": "地点名，可沿用当前位置",
-  "relationships": ["新增或保留的重要关系"],
-  "traits": ["新增或保留的人物特质"],
-  "inventory": ["重要随身物或资源"],
+  "relationships": ["完整的最新重要关系列表，至少包含现有关系，并按本次剧情增删改"],
+  "traits": ["完整的最新人物特质列表，按本次剧情增删改"],
+  "inventory": ["完整的最新重要随身物或资源列表，按本次剧情增删改"],
   "choices": [
     {"id":"choice-1","label":"推荐选择文本","intent":"这个选择的真实意图"},
     {"id":"choice-2","label":"推荐选择文本","intent":"这个选择的真实意图"},
@@ -82,6 +87,11 @@ JSON 格式：
   ],
   "risk": "这个节点最重要的风险"
 }
+
+时间规则：
+- 如果剧情只经过一夜、几天或数周，timeDeltaDays 必须如实返回 1 到 30 左右，不要让角色年龄增加。
+- 只有剧情明确跨过多年时，timeDeltaDays 才能超过 365。
+- 每次返回的 relationships、traits、inventory 都必须反映本次行动造成的状态变化；不要机械重复旧数组。
 
 内置历史上下文：
 ${HISTORICAL_CONTEXT}`;
@@ -93,14 +103,14 @@ function buildUserPrompt(request: StoryRequest) {
     .slice(-4)
     .map(
       (turn) =>
-        `${turn.year}年，${turn.age}岁，${turn.title}：${turn.narrative}`,
+        `${turn.year}年${turn.month ?? 1}月${turn.day ?? 1}日，${turn.age}岁，${turn.title}：${turn.narrative}`,
     )
     .join("\n");
 
   return `玩家出生资料：
 - 出生：${state.profile.birthYear}年${state.profile.birthMonth}月
 - 出生地：${describePlace(state.profile.birthPlace)}
-- 当前：${state.profile.currentYear}年，${state.profile.age}岁，人在${state.currentLocation}
+- 当前：${state.profile.currentYear}年${state.profile.currentMonth ?? state.profile.birthMonth}月${state.profile.currentDay ?? 1}日，${state.profile.age}岁，人在${state.currentLocation}
 - 当前大势：${state.profile.faction}
 - 出身：${state.profile.socialClass}
 - 关系：${state.relationships.join("、")}
@@ -166,7 +176,7 @@ function parseStoryPayload(content: string): LlmStoryPayload {
     title: parsed.title,
     narrative: parsed.narrative,
     historicalContext: parsed.historicalContext,
-    ageDelta: clampNumber(parsed.ageDelta ?? 1, 1, 5),
+    timeDeltaDays: clampNumber(parsed.timeDeltaDays ?? 7, 1, 3650),
     currentLocation: parsed.currentLocation,
     relationships: parsed.relationships,
     traits: parsed.traits,
@@ -184,11 +194,19 @@ function applyLlmPayload(
   request: StoryRequest,
   payload: LlmStoryPayload,
 ): StoryResponse {
-  const nextAge = Math.min(request.state.profile.age + payload.ageDelta, 80);
-  const nextYear = Math.min(request.state.profile.birthYear + nextAge, 280);
+  const advancedProfile = advanceProfileTime(
+    request.state.profile,
+    payload.timeDeltaDays,
+  );
+  const faction = getFactionForYearAndPlace(
+    advancedProfile.currentYear,
+    advancedProfile.birthPlace,
+  );
   const turn: StoryTurn = {
-    year: nextYear,
-    age: nextAge,
+    year: advancedProfile.currentYear,
+    month: advancedProfile.currentMonth,
+    day: advancedProfile.currentDay,
+    age: advancedProfile.age,
     title: payload.title,
     narrative: payload.narrative,
     historicalContext: payload.historicalContext,
@@ -203,9 +221,8 @@ function applyLlmPayload(
       ...request.state,
       currentLocation: payload.currentLocation || request.state.currentLocation,
       profile: {
-        ...request.state.profile,
-        age: nextAge,
-        currentYear: nextYear,
+        ...advancedProfile,
+        faction,
       },
       relationships: mergeStrings(request.state.relationships, payload.relationships),
       traits: mergeStrings(request.state.traits, payload.traits),

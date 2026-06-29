@@ -11,6 +11,8 @@ export type PlayerProfile = {
   birthMonth: number;
   birthPlace: BirthPlace;
   currentYear: number;
+  currentMonth: number;
+  currentDay: number;
   age: number;
   faction: Faction;
   socialClass: string;
@@ -33,6 +35,8 @@ export type StoryState = {
 
 export type StoryTurn = {
   year: number;
+  month: number;
+  day: number;
   age: number;
   title: string;
   narrative: string;
@@ -66,17 +70,21 @@ const STARTING_TRAITS = ["谨慎", "好奇", "坚韧", "善辩", "敏锐", "重�
 
 export function createNewLife(): StoryState {
   const birthYear = randomInt(THREE_KINGDOMS_YEAR_RANGE.start, 242);
+  const birthMonth = randomInt(1, 12);
   const birthPlace = pickRandom(BIRTH_PLACES);
   const socialClass = pickRandom(SOCIAL_CLASSES);
   const age = randomInt(12, 18);
   const currentYear = Math.min(birthYear + age, THREE_KINGDOMS_YEAR_RANGE.end - 1);
+  const currentMonth = randomInt(1, 12);
 
   const profile: PlayerProfile = {
     birthYear,
-    birthMonth: randomInt(1, 12),
+    birthMonth,
     birthPlace,
     currentYear,
-    age: currentYear - birthYear,
+    currentMonth,
+    currentDay: randomInt(1, daysInMonth(currentMonth)),
+    age: calculateAge(birthYear, birthMonth, currentYear, currentMonth),
     faction: getFactionForYearAndPlace(currentYear, birthPlace),
     socialClass,
   };
@@ -102,6 +110,8 @@ export function createOpeningTurn(state: StoryState): StoryTurn {
 
   return {
     year: profile.currentYear,
+    month: profile.currentMonth,
+    day: profile.currentDay,
     age: profile.age,
     title: "乱世初醒",
     narrative: `你生于建安以来风声不息的年代，故乡是${profile.birthPlace.name}。${profile.birthPlace.socialTexture}到了${profile.currentYear}年，你已${profile.age}岁，家中开始把一些真正会改变命运的事交到你手里。`,
@@ -129,22 +139,24 @@ export function createOpeningTurn(state: StoryState): StoryTurn {
 
 export function createMockStoryResponse(request: StoryRequest): StoryResponse {
   const previous = request.state.history.at(-1);
-  const nextAge = Math.min(request.state.profile.age + randomInt(1, 3), 60);
-  const nextYear = Math.min(
-    request.state.profile.birthYear + nextAge,
-    THREE_KINGDOMS_YEAR_RANGE.end,
+  const advancedProfile = advanceProfileTime(
+    request.state.profile,
+    randomInt(3, 45),
   );
   const faction = getFactionForYearAndPlace(
-    nextYear,
+    advancedProfile.currentYear,
     request.state.profile.birthPlace,
   );
+  const newResource = pickRandom(["一封乡中荐书", "半袋粟米", "郡中通行木符", "修补过的短刀"]);
 
   const turn: StoryTurn = {
-    year: nextYear,
-    age: nextAge,
+    year: advancedProfile.currentYear,
+    month: advancedProfile.currentMonth,
+    day: advancedProfile.currentDay,
+    age: advancedProfile.age,
     title: "命运分岔",
-    narrative: `你选择了“${request.action}”。这件事没有立刻惊动天下，却改变了你在乡里人眼中的位置。数年间，你学会在官府征发、宗族庇护和远方战报之间判断轻重，也开始有人带着真正棘手的请求来找你。`,
-    historicalContext: `${nextYear}年前后，${request.state.currentLocation}仍受${faction}大势影响。地方秩序表面维持，背后却常被粮赋、兵役和交通断绝牵动。`,
+    narrative: `你选择了“${request.action}”。接下来的几日里，这件事没有立刻惊动天下，却改变了你在乡里人眼中的位置。你在官府征发、宗族庇护和远方战报之间学着判断轻重，也开始有人带着真正棘手的请求来找你。`,
+    historicalContext: `${advancedProfile.currentYear}年前后，${request.state.currentLocation}仍受${faction}大势影响。地方秩序表面维持，背后却常被粮赋、兵役和交通断绝牵动。`,
     choices: [
       {
         id: "protect-family",
@@ -173,9 +185,7 @@ export function createMockStoryResponse(request: StoryRequest): StoryResponse {
     state: {
       ...request.state,
       profile: {
-        ...request.state.profile,
-        age: nextAge,
-        currentYear: nextYear,
+        ...advancedProfile,
         faction,
       },
       relationships: unique([
@@ -183,6 +193,7 @@ export function createMockStoryResponse(request: StoryRequest): StoryResponse {
         "一位留意你的地方掾吏",
       ]),
       traits: unique([...request.state.traits, "知机"]),
+      inventory: unique([...request.state.inventory, newResource]),
       history: [...request.state.history, turn],
     },
   };
@@ -202,4 +213,54 @@ function pickRandom<T>(items: T[]): T {
 
 function unique(items: string[]) {
   return Array.from(new Set(items));
+}
+
+export function advanceProfileTime(
+  profile: PlayerProfile,
+  daysToAdvance: number,
+): PlayerProfile {
+  let currentYear = profile.currentYear;
+  let currentMonth = profile.currentMonth ?? profile.birthMonth;
+  let currentDay = profile.currentDay ?? 1;
+  let remainingDays = Math.max(0, Math.round(daysToAdvance));
+
+  while (remainingDays > 0 && currentYear < THREE_KINGDOMS_YEAR_RANGE.end) {
+    const daysLeftThisMonth = daysInMonth(currentMonth) - currentDay;
+
+    if (remainingDays <= daysLeftThisMonth) {
+      currentDay += remainingDays;
+      remainingDays = 0;
+    } else {
+      remainingDays -= daysLeftThisMonth + 1;
+      currentDay = 1;
+      currentMonth += 1;
+
+      if (currentMonth > 12) {
+        currentMonth = 1;
+        currentYear += 1;
+      }
+    }
+  }
+
+  return {
+    ...profile,
+    currentYear,
+    currentMonth,
+    currentDay,
+    age: calculateAge(profile.birthYear, profile.birthMonth, currentYear, currentMonth),
+  };
+}
+
+function calculateAge(
+  birthYear: number,
+  birthMonth: number,
+  currentYear: number,
+  currentMonth: number,
+) {
+  const age = currentYear - birthYear - (currentMonth < birthMonth ? 1 : 0);
+  return Math.max(0, age);
+}
+
+function daysInMonth(month: number) {
+  return [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1] ?? 30;
 }

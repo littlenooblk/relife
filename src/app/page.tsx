@@ -104,7 +104,8 @@ export default function Home() {
               <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <p className="text-sm text-amber-300/80">
-                    {currentTurn.year}年 · {currentTurn.age}岁 · {sourceLabel}
+                    {formatTurnDate(currentTurn)} · {currentTurn.age}岁 ·{" "}
+                    {sourceLabel}
                   </p>
                   <h2 className="mt-2 text-3xl font-bold text-amber-50">
                     {currentTurn.title}
@@ -209,6 +210,10 @@ function ProfileCard({ state }: { state: StoryState }) {
   const rows = [
     ["出生", `${profile.birthYear}年${profile.birthMonth}月`],
     ["出生地", `${profile.birthPlace.name}（${profile.birthPlace.presentDay}）`],
+    [
+      "当前日期",
+      `${profile.currentYear}年${profile.currentMonth ?? profile.birthMonth}月${profile.currentDay ?? 1}日`,
+    ],
     ["区域", profile.birthPlace.region],
     ["出身", profile.socialClass],
     ["当前大势", profile.faction],
@@ -243,7 +248,11 @@ function MemoryCard({ state }: { state: StoryState }) {
         <ol className="mt-2 space-y-2 text-sm leading-6 text-stone-300">
           {state.history.slice(-5).map((turn, index) => (
             <li key={`${turn.year}-${turn.title}-${index}`}>
-              {turn.year}年：{turn.title}
+              <span className="text-stone-400">{formatTurnDate(turn)}：</span>
+              {turn.title}
+              <span className="mt-1 block line-clamp-2 text-stone-500">
+                {turn.narrative}
+              </span>
             </li>
           ))}
         </ol>
@@ -268,4 +277,12 @@ function InfoList({ title, items }: { title: string; items: string[] }) {
       </div>
     </div>
   );
+}
+
+function formatTurnDate(turn: {
+  year: number;
+  month?: number;
+  day?: number;
+}) {
+  return `${turn.year}年${turn.month ?? 1}月${turn.day ?? 1}日`;
 }
