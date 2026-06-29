@@ -31,6 +31,7 @@ export type StoryState = {
   traits: string[];
   inventory: string[];
   history: StoryTurn[];
+  isGameOver: boolean;
 };
 
 export type StoryTurn = {
@@ -43,6 +44,8 @@ export type StoryTurn = {
   historicalContext: string;
   choices: StoryChoice[];
   risk: string;
+  chosenAction?: string;
+  isEnding?: boolean;
 };
 
 export type StoryRequest = {
@@ -96,6 +99,7 @@ export function createNewLife(): StoryState {
     traits: [pickRandom(STARTING_TRAITS)],
     inventory: ["粗布衣", "竹简残页", "少量铜钱"],
     history: [],
+    isGameOver: false,
   };
 
   const openingTurn = createOpeningTurn(state);
@@ -134,6 +138,7 @@ export function createOpeningTurn(state: StoryState): StoryTurn {
       },
     ],
     risk: "乱世中每一步都可能带来征发、饥荒、疫病或卷入战事的风险。",
+    isEnding: false,
   };
 }
 
@@ -177,6 +182,8 @@ export function createMockStoryResponse(request: StoryRequest): StoryResponse {
     risk: previous
       ? `上一次的“${previous.title}”仍在影响旁人对你的信任。`
       : "你尚未建立足够声望，贸然行动容易被豪强或官吏利用。",
+    chosenAction: request.action,
+    isEnding: false,
   };
 
   return {
@@ -195,6 +202,7 @@ export function createMockStoryResponse(request: StoryRequest): StoryResponse {
       traits: unique([...request.state.traits, "知机"]),
       inventory: unique([...request.state.inventory, newResource]),
       history: [...request.state.history, turn],
+      isGameOver: false,
     },
   };
 }

@@ -1,15 +1,35 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
-import { StoryResponse, StoryState, createNewLife } from "@/lib/game";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import {
+  StoryResponse,
+  StoryState,
+  createNewLife,
+} from "@/lib/game";
+
+const SAVE_KEY = "relife:three-kingdoms-save";
+const SAVE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+type LocalSave = {
+  savedAt: number;
+  selectedTurnIndex: number;
+  state: StoryState;
+};
 
 export default function Home() {
   const [state, setState] = useState<StoryState | null>(null);
+  const [selectedTurnIndex, setSelectedTurnIndex] = useState(0);
   const [customAction, setCustomAction] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
+  const [savedGame, setSavedGame] = useState<LocalSave | null>(() =>
+    typeof window === "undefined" ? null : readLocalSave(),
+  );
 
-  const currentTurn = state?.history.at(-1);
+  const currentTurn = state?.history[selectedTurnIndex];
+  const latestTurnIndex = state ? state.history.length - 1 : 0;
+  const isViewingLatestTurn = selectedTurnIndex === latestTurnIndex;
+  const canContinue = Boolean(state && isViewingLatestTurn && !state.isGameOver);
   const sourceLabel = useMemo(() => {
     if (!state || !currentTurn) {
       return "";
@@ -18,14 +38,48 @@ export default function Home() {
     return currentTurn.title === "乱世初醒" ? "本地开局" : "剧情生成";
   }, [currentTurn, state]);
 
+  useEffect(() => {
+    if (!state) {
+      return;
+    }
+
+    const save: LocalSave = {
+      savedAt: Date.now(),
+      selectedTurnIndex,
+      state,
+    };
+
+    localStorage.setItem(SAVE_KEY, JSON.stringify(save));
+  }, [selectedTurnIndex, state]);
+
   function startNewLife() {
     setState(createNewLife());
+    setSelectedTurnIndex(0);
     setCustomAction("");
     setError("");
+    setSavedGame(null);
+  }
+
+  function continueSavedGame() {
+    const save = readLocalSave();
+
+    if (!save) {
+      setSavedGame(null);
+      setError("没有找到 7 天内的本地存档。");
+      return;
+    }
+
+    setState(save.state);
+    setSelectedTurnIndex(
+      Math.min(save.selectedTurnIndex, save.state.history.length - 1),
+    );
+    setCustomAction("");
+    setError("");
+    setSavedGame(save);
   }
 
   async function submitAction(action: string) {
-    if (!state || !action.trim()) {
+    if (!state || !action.trim() || !canContinue) {
       return;
     }
 
@@ -50,10 +104,16 @@ export default function Home() {
         throw new Error("error" in data ? data.error : "剧情生成失败");
       }
 
-      setState((data as StoryResponse).state);
+      const nextState = (data as StoryResponse).state;
+      setState(nextState);
+      setSelectedTurnIndex(nextState.history.length - 1);
       setCustomAction("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "剧情生成失败，请稍后重试。");
+      setError(
+        err instanceof Error
+          ? `剧情生成失败，当前进度已保存在本地：${err.message}`
+          : "剧情生成失败，当前进度已保存在本地。",
+      );
     } finally {
       setIsLoading(false);
     }
@@ -92,12 +152,20 @@ export default function Home() {
         </header>
 
         {!state || !currentTurn ? (
-          <EmptyState onStart={startNewLife} />
+          <EmptyState
+            onContinue={continueSavedGame}
+            onStart={startNewLife}
+            savedGame={savedGame}
+          />
         ) : (
           <div className="grid gap-6 lg:grid-cols-[20rem_1fr]">
             <aside className="space-y-4">
               <ProfileCard state={state} />
-              <MemoryCard state={state} />
+              <MemoryCard
+                selectedTurnIndex={selectedTurnIndex}
+                setSelectedTurnIndex={setSelectedTurnIndex}
+                state={state}
+              />
             </aside>
 
             <section className="rounded-3xl border border-amber-200/15 bg-stone-950/70 p-6 shadow-2xl shadow-black/30">
@@ -112,11 +180,17 @@ export default function Home() {
                   </h2>
                 </div>
                 <span className="rounded-full border border-amber-200/20 px-3 py-1 text-sm text-stone-300">
-                  {state.currentLocation}
+                  {isViewingLatestTurn ? state.currentLocation : "回看经历"}
                 </span>
               </div>
 
               <article className="space-y-5 text-lg leading-9 text-stone-100">
+                {currentTurn.chosenAction ? (
+                  <div className="rounded-2xl border border-amber-200/10 bg-amber-950/20 p-4 text-base leading-7 text-amber-100">
+                    <strong className="text-amber-200">当步选择：</strong>
+                    {currentTurn.chosenAction}
+                  </div>
+                ) : null}
                 <p>{currentTurn.narrative}</p>
                 <div className="rounded-2xl border border-sky-200/10 bg-sky-950/25 p-4 text-base leading-7 text-sky-100">
                   <strong className="text-sky-200">历史地理：</strong>
@@ -126,9 +200,21 @@ export default function Home() {
                   <strong className="text-red-200">风险：</strong>
                   {currentTurn.risk}
                 </div>
+                {currentTurn.isEnding ? (
+                  <div className="rounded-2xl border border-stone-200/10 bg-stone-900/80 p-4 text-base leading-7 text-stone-200">
+                    这一生已经结束。你可以从左侧目录回看每一步，也可以重开一生。
+                  </div>
+                ) : null}
               </article>
 
-              <div className="mt-8 space-y-4">
+              {!isViewingLatestTurn ? (
+                <div className="mt-8 rounded-2xl border border-amber-200/10 bg-stone-900/70 p-4 text-sm leading-6 text-stone-300">
+                  你正在回看过往经历。回到目录最后一项，才能继续推动当前人生。
+                </div>
+              ) : null}
+
+              {canContinue ? (
+                <div className="mt-8 space-y-4">
                 <h3 className="text-lg font-semibold text-amber-100">
                   推荐选择
                 </h3>
@@ -150,9 +236,11 @@ export default function Home() {
                     </button>
                   ))}
                 </div>
-              </div>
+                </div>
+              ) : null}
 
-              <form className="mt-6 space-y-3" onSubmit={handleCustomSubmit}>
+              {canContinue ? (
+                <form className="mt-6 space-y-3" onSubmit={handleCustomSubmit}>
                 <label
                   className="block text-lg font-semibold text-amber-100"
                   htmlFor="custom-action"
@@ -178,7 +266,8 @@ export default function Home() {
                   </button>
                   {error ? <p className="text-sm text-red-300">{error}</p> : null}
                 </div>
-              </form>
+                </form>
+              ) : null}
             </section>
           </div>
         )}
@@ -187,7 +276,15 @@ export default function Home() {
   );
 }
 
-function EmptyState({ onStart }: { onStart: () => void }) {
+function EmptyState({
+  onContinue,
+  onStart,
+  savedGame,
+}: {
+  onContinue: () => void;
+  onStart: () => void;
+  savedGame: LocalSave | null;
+}) {
   return (
     <section className="rounded-3xl border border-dashed border-amber-200/25 bg-stone-950/45 p-10 text-center">
       <h2 className="text-2xl font-bold text-amber-50">尚未开始</h2>
@@ -201,6 +298,21 @@ function EmptyState({ onStart }: { onStart: () => void }) {
       >
         随机出生
       </button>
+      {savedGame ? (
+        <div className="mt-6 rounded-2xl border border-amber-200/15 bg-stone-900/70 p-4">
+          <p className="text-sm leading-6 text-stone-300">
+            找到 7 天内的本地存档：
+            {formatSaveSummary(savedGame)}
+          </p>
+          <button
+            className="mt-3 rounded-full border border-amber-200/30 px-5 py-2.5 font-semibold text-amber-100 transition hover:bg-amber-100/10"
+            onClick={onContinue}
+            type="button"
+          >
+            继续游戏
+          </button>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -236,7 +348,15 @@ function ProfileCard({ state }: { state: StoryState }) {
   );
 }
 
-function MemoryCard({ state }: { state: StoryState }) {
+function MemoryCard({
+  selectedTurnIndex,
+  setSelectedTurnIndex,
+  state,
+}: {
+  selectedTurnIndex: number;
+  setSelectedTurnIndex: (index: number) => void;
+  state: StoryState;
+}) {
   return (
     <section className="rounded-3xl border border-amber-200/15 bg-stone-950/70 p-5">
       <h2 className="text-xl font-bold text-amber-50">人生痕迹</h2>
@@ -244,15 +364,30 @@ function MemoryCard({ state }: { state: StoryState }) {
       <InfoList title="特质" items={state.traits} />
       <InfoList title="资源" items={state.inventory} />
       <div className="mt-5">
-        <p className="text-sm font-semibold text-amber-200">经历</p>
+        <p className="text-sm font-semibold text-amber-200">经历目录</p>
         <ol className="mt-2 space-y-2 text-sm leading-6 text-stone-300">
-          {state.history.slice(-5).map((turn, index) => (
+          {state.history.map((turn, index) => (
             <li key={`${turn.year}-${turn.title}-${index}`}>
-              <span className="text-stone-400">{formatTurnDate(turn)}：</span>
-              {turn.title}
-              <span className="mt-1 block line-clamp-2 text-stone-500">
-                {turn.narrative}
-              </span>
+              <button
+                className={`w-full rounded-2xl border p-3 text-left transition ${
+                  selectedTurnIndex === index
+                    ? "border-amber-200/45 bg-amber-100/10"
+                    : "border-amber-200/10 bg-white/[0.03] hover:border-amber-200/30"
+                }`}
+                onClick={() => setSelectedTurnIndex(index)}
+                type="button"
+              >
+                <span className="block text-stone-400">
+                  第{index + 1}步 · {formatTurnDate(turn)}
+                </span>
+                <span className="mt-1 block font-semibold text-stone-100">
+                  {turn.title}
+                  {turn.isEnding ? " · 终局" : ""}
+                </span>
+                <span className="mt-1 block line-clamp-2 text-stone-500">
+                  {turn.chosenAction ? `选择：${turn.chosenAction}` : "出生开局"}
+                </span>
+              </button>
             </li>
           ))}
         </ol>
@@ -285,4 +420,42 @@ function formatTurnDate(turn: {
   day?: number;
 }) {
   return `${turn.year}年${turn.month ?? 1}月${turn.day ?? 1}日`;
+}
+
+function readLocalSave(): LocalSave | null {
+  try {
+    const raw = localStorage.getItem(SAVE_KEY);
+
+    if (!raw) {
+      return null;
+    }
+
+    const save = JSON.parse(raw) as LocalSave;
+
+    if (!save.savedAt || !save.state || Date.now() - save.savedAt > SAVE_TTL_MS) {
+      localStorage.removeItem(SAVE_KEY);
+      return null;
+    }
+
+    return save;
+  } catch {
+    localStorage.removeItem(SAVE_KEY);
+    return null;
+  }
+}
+
+function formatSaveSummary(save: LocalSave) {
+  const latestTurn = save.state.history.at(-1);
+  const savedAt = new Date(save.savedAt).toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
+  if (!latestTurn) {
+    return `保存于 ${savedAt}`;
+  }
+
+  return `${latestTurn.age}岁，${latestTurn.title}，保存于 ${savedAt}`;
 }

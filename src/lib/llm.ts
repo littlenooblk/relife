@@ -36,6 +36,7 @@ type LlmStoryPayload = {
   inventory?: string[];
   choices: StoryChoice[];
   risk: string;
+  isGameOver?: boolean;
 };
 
 export async function generateStoryTurn(
@@ -68,7 +69,8 @@ function buildSystemPrompt() {
 3. 玩家可以影响自己、家庭、乡里、军府或地方层面的命运，但不能轻易改变重大历史结局。
 4. 叙事使用第二人称中文，克制、有历史质感，不玄幻，不出现现代物品。
 5. 推荐选项必须是重大人生选择，且彼此方向明显不同。
-6. 只返回 JSON，不要 Markdown，不要额外解释。
+6. 如果玩家角色死亡或人生已经结束，必须直接、克制地收束，不要拖沓，不要再安排新的冒险。
+7. 只返回 JSON，不要 Markdown，不要额外解释。
 
 JSON 格式：
 {
@@ -85,13 +87,15 @@ JSON 格式：
     {"id":"choice-2","label":"推荐选择文本","intent":"这个选择的真实意图"},
     {"id":"choice-3","label":"推荐选择文本","intent":"这个选择的真实意图"}
   ],
-  "risk": "这个节点最重要的风险"
+  "risk": "这个节点最重要的风险",
+  "isGameOver": false
 }
 
 时间规则：
 - 如果剧情只经过一夜、几天或数周，timeDeltaDays 必须如实返回 1 到 30 左右，不要让角色年龄增加。
 - 只有剧情明确跨过多年时，timeDeltaDays 才能超过 365。
 - 每次返回的 relationships、traits、inventory 都必须反映本次行动造成的状态变化；不要机械重复旧数组。
+- 如果角色死亡，isGameOver 返回 true，narrative 控制在 80 到 160 字，choices 返回空数组，risk 用一句话交代死因或结局代价。
 
 内置历史上下文：
 ${HISTORICAL_CONTEXT}`;
@@ -166,7 +170,7 @@ function parseStoryPayload(content: string): LlmStoryPayload {
     !parsed.narrative ||
     !parsed.historicalContext ||
     !Array.isArray(parsed.choices) ||
-    parsed.choices.length < 2 ||
+    (!parsed.isGameOver && parsed.choices.length < 2) ||
     !parsed.risk
   ) {
     throw new Error("LLM 返回的剧情 JSON 缺少必要字段");
@@ -181,12 +185,15 @@ function parseStoryPayload(content: string): LlmStoryPayload {
     relationships: parsed.relationships,
     traits: parsed.traits,
     inventory: parsed.inventory,
-    choices: parsed.choices.slice(0, 4).map((choice, index) => ({
-      id: choice.id || `choice-${index + 1}`,
-      label: choice.label,
-      intent: choice.intent || choice.label,
-    })),
+    choices: parsed.isGameOver
+      ? []
+      : parsed.choices.slice(0, 4).map((choice, index) => ({
+          id: choice.id || `choice-${index + 1}`,
+          label: choice.label,
+          intent: choice.intent || choice.label,
+        })),
     risk: parsed.risk,
+    isGameOver: Boolean(parsed.isGameOver),
   };
 }
 
@@ -212,6 +219,8 @@ function applyLlmPayload(
     historicalContext: payload.historicalContext,
     choices: payload.choices,
     risk: payload.risk,
+    chosenAction: request.action,
+    isEnding: payload.isGameOver,
   };
 
   return {
@@ -228,6 +237,7 @@ function applyLlmPayload(
       traits: mergeStrings(request.state.traits, payload.traits),
       inventory: mergeStrings(request.state.inventory, payload.inventory),
       history: [...request.state.history, turn],
+      isGameOver: payload.isGameOver || request.state.isGameOver,
     },
   };
 }
