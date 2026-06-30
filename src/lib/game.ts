@@ -40,6 +40,16 @@ export type PlayerIntentProfile = {
   recentIntents: string[];
 };
 
+export type PersonaKey =
+  | "benevolence"
+  | "strategy"
+  | "martial"
+  | "charisma"
+  | "reputation"
+  | "wealth";
+
+export type PersonaProfile = Record<PersonaKey, number>;
+
 export type StoryState = {
   profile: PlayerProfile;
   currentLocation: string;
@@ -49,6 +59,7 @@ export type StoryState = {
   history: StoryTurn[];
   isGameOver: boolean;
   intentProfile: PlayerIntentProfile;
+  personaProfile: PersonaProfile;
 };
 
 export type StoryTurn = {
@@ -76,8 +87,9 @@ export type StoryResponse = {
   source: "llm" | "mock";
 };
 
-export const TARGET_STORY_TURNS = 24;
-export const ENDING_SOON_TURN = 18;
+export const MIN_STORY_TURNS = 16;
+export const MAX_STORY_TURNS = 32;
+export const ENDING_SOON_TURN = 24;
 
 export const PREFERENCE_LABELS: Record<PlayerPreferenceKey, string> = {
   family: "重视亲族",
@@ -89,6 +101,33 @@ export const PREFERENCE_LABELS: Record<PlayerPreferenceKey, string> = {
   survival: "优先生存",
   scholarship: "向往学识名望",
   freedom: "向往自由",
+};
+
+export const PERSONA_LABELS: Record<PersonaKey, string> = {
+  benevolence: "仁德",
+  strategy: "谋略",
+  martial: "勇武",
+  charisma: "魅力",
+  reputation: "名望",
+  wealth: "资财",
+};
+
+export const PERSONA_KEYS: PersonaKey[] = [
+  "benevolence",
+  "strategy",
+  "martial",
+  "charisma",
+  "reputation",
+  "wealth",
+];
+
+const BASE_PERSONA_PROFILE: PersonaProfile = {
+  benevolence: 45,
+  strategy: 45,
+  martial: 45,
+  charisma: 45,
+  reputation: 35,
+  wealth: 30,
 };
 
 const EMPTY_PREFERENCE_SCORES: Record<PlayerPreferenceKey, number> = {
@@ -113,6 +152,15 @@ const PREFERENCE_KEYWORDS: Record<PlayerPreferenceKey, string[]> = {
   survival: ["活", "避难", "逃", "躲", "安全", "保命", "粮荒", "疫", "减少风险", "庇护"],
   scholarship: ["学", "书", "文", "师", "名士", "读", "策论", "经", "竹简", "声名"],
   freedom: ["自由", "不受", "归隐", "山林", "离群", "不仕", "自己决定", "摆脱"],
+};
+
+const PERSONA_KEYWORDS: Record<PersonaKey, string[]> = {
+  benevolence: ["仁", "义", "救", "照顾", "保护", "家人", "乡邻", "无辜", "施舍", "孝", "善"],
+  strategy: ["谋", "计", "策", "观察", "学习", "文书", "权衡", "试探", "联络", "布局"],
+  martial: ["战", "武", "军", "守备", "坞堡", "刀", "弓", "护卫", "杀", "突围", "勇"],
+  charisma: ["说服", "结交", "婚", "爱", "名士", "宴", "调停", "人心", "伴侣", "盟友"],
+  reputation: ["名", "声望", "仕", "官", "军功", "举荐", "门第", "大义", "承诺", "信"],
+  wealth: ["财", "钱", "商", "田", "粮", "盐", "买卖", "家业", "债", "资源", "经营"],
 };
 
 const SOCIAL_CLASSES = [
@@ -157,6 +205,7 @@ export function createNewLife(): StoryState {
     history: [],
     isGameOver: false,
     intentProfile: createEmptyIntentProfile(),
+    personaProfile: createInitialPersonaProfile(socialClass),
   };
 
   const openingTurn = createOpeningTurn(state);
@@ -180,18 +229,18 @@ export function createOpeningTurn(state: StoryState): StoryTurn {
     choices: [
       {
         id: "study",
-        label: "拜访乡中识字的长者，学习文书与时局",
-        intent: "学习文书、观察局势，寻找进入郡县体系的机会",
+        label: "把未来押在学识与名望上，离家拜师求进",
+        intent: "选择以学识、名声和仕途作为人生主线，即使要离开家人多年",
       },
       {
         id: "trade",
-        label: "跟随亲族商旅去邻近郡县见世面",
-        intent: "参与商旅，积累见闻和人脉",
+        label: "跟随亲族经营家业，在乱世中保全一家",
+        intent: "选择以亲族、家业和生计作为人生主线，优先守住家人",
       },
       {
         id: "militia",
-        label: "加入坞堡或地方守备，换取家人庇护",
-        intent: "接受武备训练，靠军功或守备求生",
+        label: "投身坞堡或军府，用武力换取庇护与出路",
+        intent: "选择以军功、风险和权势作为人生主线，承担卷入战事的代价",
       },
     ],
     risk: "乱世中每一步都可能带来征发、饥荒、疫病或卷入战事的风险。",
@@ -202,10 +251,10 @@ export function createOpeningTurn(state: StoryState): StoryTurn {
 export function createMockStoryResponse(request: StoryRequest): StoryResponse {
   const previous = request.state.history.at(-1);
   const turnCount = request.state.history.length;
-  const shouldEnd = turnCount >= TARGET_STORY_TURNS - 1;
+  const shouldEnd = turnCount >= MAX_STORY_TURNS - 1;
   const advancedProfile = advanceProfileTime(
     request.state.profile,
-    shouldEnd ? randomInt(365, 3650) : getMockTimeAdvanceDays(turnCount),
+    shouldEnd ? randomInt(1095, 4380) : getMockTimeAdvanceDays(turnCount),
   );
   const faction = getFactionForYearAndPlace(
     advancedProfile.currentYear,
@@ -216,6 +265,11 @@ export function createMockStoryResponse(request: StoryRequest): StoryResponse {
     request.state.intentProfile,
     request.action,
   );
+  const personaProfile = updatePersonaProfile(
+    request.state.personaProfile,
+    request.action,
+    request.state.intentProfile,
+  );
 
   const turn: StoryTurn = {
     year: advancedProfile.currentYear,
@@ -224,26 +278,26 @@ export function createMockStoryResponse(request: StoryRequest): StoryResponse {
     age: advancedProfile.age,
     title: shouldEnd ? "一生落幕" : "命运分岔",
     narrative: shouldEnd
-      ? `你选择了“${request.action}”。此后许多年，你没有再追逐更大的名声，只在亲族、乡邻与时代余波之间守住自己能够守住的东西。乱世终会越过每个人，你的一生也在熟悉的人声里安静收束。`
-      : `你选择了“${request.action}”。接下来一段日子里，这件事没有立刻惊动天下，却改变了你在乡里人眼中的位置。你在亲族牵挂、私情取舍、官府征发和远方战报之间学着判断轻重，也开始有人带着真正棘手的请求来找你。`,
+      ? `你选择了“${request.action}”。此后许多年，你在熟悉的门声、饭香和亲族低语里慢慢老去。远处的战报仍会传来，但你更常记得的是某个黄昏里家人递来的热水，和自己终于放下的一口气。`
+      : `你选择了“${request.action}”。此后数月到数年间，你走过泥泞的道路，听过家中压低声音的争执，也接下亲友一次次托付。那些小事不再需要逐件定夺，却在你身上留下痕迹。如今，一个真正会改变余生方向的关口摆在你面前。`,
     historicalContext: `${advancedProfile.currentYear}年前后，${request.state.currentLocation}仍受${faction}大势影响。地方秩序表面维持，背后却常被粮赋、兵役和交通断绝牵动。`,
     choices: shouldEnd
       ? []
       : [
           {
             id: "protect-family",
-            label: "优先保护家人与乡邻，减少冒险",
-            intent: "把资源用于家族和乡里安全",
+            label: "放弃更大的机会，优先守住家人与乡邻",
+            intent: "在人生主线上转向亲族责任、家业和地方声望",
           },
           {
             id: "marriage-duty",
-            label: "回应一段婚约或私情，承担随之而来的责任",
-            intent: "在爱情、婚姻和家族利益之间做选择",
+            label: "接受一段会改变门第与命运的婚约或私情",
+            intent: "在人生主线上转向爱情、婚姻、子女和宗族责任",
           },
           {
             id: "travel",
-            label: "离开故地，去更大的城邑寻找机会",
-            intent: "迁徙到政治或商业中心",
+            label: "离开故地，把余生押给更大的城邑与机会",
+            intent: "在人生主线上转向迁徙、冒险、名望或权势",
           },
         ],
     risk: shouldEnd
@@ -273,6 +327,7 @@ export function createMockStoryResponse(request: StoryRequest): StoryResponse {
       history: [...request.state.history, turn],
       isGameOver: shouldEnd,
       intentProfile,
+      personaProfile,
     },
   };
 }
@@ -286,6 +341,37 @@ export function createEmptyIntentProfile(): PlayerIntentProfile {
     scores: { ...EMPTY_PREFERENCE_SCORES },
     recentIntents: [],
   };
+}
+
+export function createInitialPersonaProfile(socialClass: string): PersonaProfile {
+  const profile = { ...BASE_PERSONA_PROFILE };
+
+  if (socialClass.includes("军户")) {
+    profile.martial += 12;
+    profile.reputation += 4;
+  }
+
+  if (socialClass.includes("商旅")) {
+    profile.wealth += 12;
+    profile.charisma += 4;
+  }
+
+  if (socialClass.includes("小吏") || socialClass.includes("士人")) {
+    profile.strategy += 10;
+    profile.reputation += 6;
+  }
+
+  if (socialClass.includes("豪族")) {
+    profile.reputation += 10;
+    profile.wealth += 8;
+  }
+
+  if (socialClass.includes("农户") || socialClass.includes("工匠")) {
+    profile.benevolence += 5;
+    profile.wealth += 3;
+  }
+
+  return clampPersonaProfile(profile);
 }
 
 export function updateIntentProfile(
@@ -338,6 +424,49 @@ export function describeIntentProfile(profile: PlayerIntentProfile | undefined) 
     .join("、");
 }
 
+export function updatePersonaProfile(
+  profile: PersonaProfile | undefined,
+  action: string,
+  intentProfile?: PlayerIntentProfile,
+): PersonaProfile {
+  const nextProfile = { ...BASE_PERSONA_PROFILE, ...profile };
+  const detectedPersonaKeys = detectPersonaDimensions(action);
+  const detectedPreferences = detectIntentPreferences(action);
+
+  for (const key of detectedPersonaKeys) {
+    nextProfile[key] += 6;
+  }
+
+  for (const preference of detectedPreferences) {
+    applyPreferenceToPersona(nextProfile, preference);
+  }
+
+  for (const preference of getTopPreferences(intentProfile, 2)) {
+    applyPreferenceToPersona(nextProfile, preference.key, 2);
+  }
+
+  return clampPersonaProfile(nextProfile);
+}
+
+export function getPersonaDimensions(profile: PersonaProfile | undefined) {
+  const safeProfile = clampPersonaProfile({
+    ...BASE_PERSONA_PROFILE,
+    ...profile,
+  });
+
+  return PERSONA_KEYS.map((key) => ({
+    key,
+    label: PERSONA_LABELS[key],
+    value: safeProfile[key],
+  }));
+}
+
+export function describePersonaProfile(profile: PersonaProfile | undefined) {
+  return getPersonaDimensions(profile)
+    .map((dimension) => `${dimension.label}${dimension.value}`)
+    .join("、");
+}
+
 function randomInt(min: number, max: number) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
@@ -362,20 +491,87 @@ function detectIntentPreferences(action: string): PlayerPreferenceKey[] {
     .map(([key]) => key);
 }
 
-function getMockTimeAdvanceDays(turnCount: number) {
-  if (turnCount < 6) {
-    return randomInt(7, 90);
+function detectPersonaDimensions(action: string): PersonaKey[] {
+  const normalizedAction = action.toLowerCase();
+
+  return (Object.entries(PERSONA_KEYWORDS) as Array<[PersonaKey, string[]]>)
+    .filter(([, keywords]) =>
+      keywords.some((keyword) => normalizedAction.includes(keyword)),
+    )
+    .map(([key]) => key);
+}
+
+function applyPreferenceToPersona(
+  profile: PersonaProfile,
+  preference: PlayerPreferenceKey,
+  amount = 4,
+) {
+  if (preference === "family" || preference === "morality") {
+    profile.benevolence += amount;
+    profile.reputation += Math.ceil(amount / 2);
   }
 
-  if (turnCount < 14) {
-    return randomInt(120, 540);
+  if (preference === "romance") {
+    profile.charisma += amount;
+    profile.benevolence += Math.ceil(amount / 2);
+  }
+
+  if (preference === "power") {
+    profile.reputation += amount;
+    profile.strategy += Math.ceil(amount / 2);
+  }
+
+  if (preference === "wealth") {
+    profile.wealth += amount;
+    profile.strategy += Math.ceil(amount / 2);
+  }
+
+  if (preference === "adventure") {
+    profile.martial += amount;
+    profile.charisma += Math.ceil(amount / 2);
+  }
+
+  if (preference === "survival") {
+    profile.strategy += amount;
+    profile.martial += Math.ceil(amount / 2);
+  }
+
+  if (preference === "scholarship") {
+    profile.strategy += amount;
+    profile.reputation += Math.ceil(amount / 2);
+  }
+
+  if (preference === "freedom") {
+    profile.charisma += amount;
+    profile.strategy += Math.ceil(amount / 2);
+  }
+}
+
+function clampPersonaProfile(profile: PersonaProfile): PersonaProfile {
+  return PERSONA_KEYS.reduce((nextProfile, key) => {
+    nextProfile[key] = clamp(profile[key] ?? BASE_PERSONA_PROFILE[key], 0, 100);
+    return nextProfile;
+  }, {} as PersonaProfile);
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(Math.round(value), min), max);
+}
+
+function getMockTimeAdvanceDays(turnCount: number) {
+  if (turnCount < 4) {
+    return randomInt(120, 730);
+  }
+
+  if (turnCount < 9) {
+    return randomInt(365, 1460);
   }
 
   if (turnCount < ENDING_SOON_TURN) {
-    return randomInt(365, 1095);
+    return randomInt(730, 2190);
   }
 
-  return randomInt(730, 2190);
+  return randomInt(1095, 3650);
 }
 
 export function advanceProfileTime(

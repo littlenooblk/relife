@@ -2,10 +2,10 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
-  TARGET_STORY_TURNS,
   StoryResponse,
   StoryState,
   createNewLife,
+  getPersonaDimensions,
   getTopPreferences,
 } from "@/lib/game";
 
@@ -163,6 +163,7 @@ export default function Home() {
           <div className="grid gap-6 lg:grid-cols-[20rem_1fr]">
             <aside className="space-y-4">
               <ProfileCard state={state} />
+              <PersonaRadarCard state={state} />
               <MemoryCard
                 selectedTurnIndex={selectedTurnIndex}
                 setSelectedTurnIndex={setSelectedTurnIndex}
@@ -218,7 +219,7 @@ export default function Home() {
               {canContinue ? (
                 <div className="mt-8 space-y-4">
                 <h3 className="text-lg font-semibold text-amber-100">
-                  推荐选择
+                  人生转折选择
                 </h3>
                 <div className="grid gap-3">
                   {currentTurn.choices.map((choice) => (
@@ -247,7 +248,7 @@ export default function Home() {
                   className="block text-lg font-semibold text-amber-100"
                   htmlFor="custom-action"
                 >
-                  或输入你的决定
+                  或输入你想选择的人生方向
                 </label>
                 <textarea
                   className="min-h-28 w-full resize-y rounded-2xl border border-amber-200/15 bg-stone-900/90 p-4 leading-7 text-stone-100 outline-none transition placeholder:text-stone-500 focus:border-amber-200/50"
@@ -255,7 +256,7 @@ export default function Home() {
                   id="custom-action"
                   maxLength={300}
                   onChange={(event) => setCustomAction(event.target.value)}
-                  placeholder="例如：我想托人给荆州的亲族送信，打听是否有避乱的去处。"
+                  placeholder="例如：我决定放弃仕途，带着家人迁往江东经营家业，即使要舍弃眼前的名声。"
                   value={customAction}
                 />
                 <div className="flex flex-wrap items-center gap-3">
@@ -264,7 +265,7 @@ export default function Home() {
                     disabled={isLoading || !customAction.trim()}
                     type="submit"
                   >
-                    {isLoading ? "推演中..." : "推动剧情"}
+                    {isLoading ? "推演中..." : "进入下一转折点"}
                   </button>
                   {error ? <p className="text-sm text-red-300">{error}</p> : null}
                 </div>
@@ -291,7 +292,7 @@ function EmptyState({
     <section className="rounded-3xl border border-dashed border-amber-200/25 bg-stone-950/45 p-10 text-center">
       <h2 className="text-2xl font-bold text-amber-50">尚未开始</h2>
       <p className="mx-auto mt-3 max-w-2xl leading-8 text-stone-300">
-        首版会随机生成三国时期的出生年月、地点与出身，然后以推荐选项和自由输入推进人生节点。
+        首版会随机生成三国时期的出生年月、地点与出身。中间的小事会由剧情自动推进，你只需要在重大人生转折点做选择。
       </p>
       <button
         className="mt-6 rounded-full bg-amber-300 px-6 py-3 font-bold text-stone-950 transition hover:bg-amber-200"
@@ -350,6 +351,114 @@ function ProfileCard({ state }: { state: StoryState }) {
   );
 }
 
+function PersonaRadarCard({ state }: { state: StoryState }) {
+  const dimensions = getPersonaDimensions(state.personaProfile);
+  const size = 220;
+  const center = size / 2;
+  const maxRadius = 72;
+  const levels = [0.25, 0.5, 0.75, 1];
+  const points = dimensions.map((dimension, index) =>
+    radarPoint(index, dimensions.length, center, maxRadius, dimension.value),
+  );
+  const polygonPoints = points.map((point) => `${point.x},${point.y}`).join(" ");
+
+  return (
+    <section className="rounded-3xl border border-amber-200/15 bg-stone-950/70 p-5">
+      <h2 className="text-xl font-bold text-amber-50">角色形象</h2>
+      <p className="mt-2 text-sm leading-6 text-stone-400">
+        六维形象会影响他人如何看待你，也会推动后续剧情机会与代价。
+      </p>
+      <svg
+        aria-label="角色六维雷达图"
+        className="mt-3 h-auto w-full"
+        role="img"
+        viewBox={`0 0 ${size} ${size}`}
+      >
+        {levels.map((level) => {
+          const levelPoints = dimensions
+            .map((_, index) =>
+              radarPoint(index, dimensions.length, center, maxRadius, level * 100),
+            )
+            .map((point) => `${point.x},${point.y}`)
+            .join(" ");
+
+          return (
+            <polygon
+              className="fill-none stroke-amber-100/10"
+              key={level}
+              points={levelPoints}
+            />
+          );
+        })}
+        {dimensions.map((dimension, index) => {
+          const axisPoint = radarPoint(
+            index,
+            dimensions.length,
+            center,
+            maxRadius,
+            100,
+          );
+          const labelPoint = radarPoint(
+            index,
+            dimensions.length,
+            center,
+            maxRadius + 24,
+            100,
+          );
+
+          return (
+            <g key={dimension.key}>
+              <line
+                className="stroke-amber-100/10"
+                x1={center}
+                x2={axisPoint.x}
+                y1={center}
+                y2={axisPoint.y}
+              />
+              <text
+                className="fill-stone-300 text-[10px]"
+                dominantBaseline="middle"
+                textAnchor="middle"
+                x={labelPoint.x}
+                y={labelPoint.y}
+              >
+                {dimension.label}
+              </text>
+            </g>
+          );
+        })}
+        <polygon
+          className="fill-emerald-300/20 stroke-emerald-200"
+          points={polygonPoints}
+          strokeWidth="2"
+        />
+        {points.map((point, index) => (
+          <circle
+            className="fill-emerald-100"
+            cx={point.x}
+            cy={point.y}
+            key={dimensions[index].key}
+            r="3"
+          />
+        ))}
+      </svg>
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        {dimensions.map((dimension) => (
+          <div
+            className="rounded-2xl border border-amber-200/10 bg-white/[0.03] px-3 py-2"
+            key={dimension.key}
+          >
+            <p className="text-xs text-stone-400">{dimension.label}</p>
+            <p className="mt-1 text-lg font-semibold text-amber-50">
+              {dimension.value}
+            </p>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function MemoryCard({
   selectedTurnIndex,
   setSelectedTurnIndex,
@@ -367,9 +476,6 @@ function MemoryCard({
   return (
     <section className="rounded-3xl border border-amber-200/15 bg-stone-950/70 p-5">
       <h2 className="text-xl font-bold text-amber-50">人生痕迹</h2>
-      <p className="mt-2 text-sm leading-6 text-stone-400">
-        当前第 {state.history.length} / {TARGET_STORY_TURNS} 步，通常约一小时完成一生。
-      </p>
       <InfoList title="关系" items={state.relationships} />
       <InfoList title="特质" items={state.traits} />
       <InfoList title="资源" items={state.inventory} />
@@ -469,6 +575,22 @@ function formatTurnDate(turn: {
   day?: number;
 }) {
   return `${turn.year}年${turn.month ?? 1}月${turn.day ?? 1}日`;
+}
+
+function radarPoint(
+  index: number,
+  total: number,
+  center: number,
+  maxRadius: number,
+  value: number,
+) {
+  const angle = (Math.PI * 2 * index) / total - Math.PI / 2;
+  const radius = (Math.max(0, Math.min(value, 100)) / 100) * maxRadius;
+
+  return {
+    x: center + Math.cos(angle) * radius,
+    y: center + Math.sin(angle) * radius,
+  };
 }
 
 function readLocalSave(): LocalSave | null {
