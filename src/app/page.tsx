@@ -359,6 +359,11 @@ function MemoryCard({
   setSelectedTurnIndex: (index: number) => void;
   state: StoryState;
 }) {
+  const latestHistory = state.history
+    .map((turn, index) => ({ turn, index }))
+    .slice(-8)
+    .reverse();
+
   return (
     <section className="rounded-3xl border border-amber-200/15 bg-stone-950/70 p-5">
       <h2 className="text-xl font-bold text-amber-50">人生痕迹</h2>
@@ -372,7 +377,7 @@ function MemoryCard({
       <div className="mt-5">
         <p className="text-sm font-semibold text-amber-200">经历目录</p>
         <ol className="mt-2 space-y-2 text-sm leading-6 text-stone-300">
-          {state.history.map((turn, index) => (
+          {latestHistory.map(({ turn, index }) => (
             <li key={`${turn.year}-${turn.title}-${index}`}>
               <button
                 className={`w-full rounded-2xl border p-3 text-left transition ${
@@ -397,6 +402,11 @@ function MemoryCard({
             </li>
           ))}
         </ol>
+        {state.history.length > latestHistory.length ? (
+          <p className="mt-2 text-xs leading-5 text-stone-500">
+            仅显示最新 {latestHistory.length} 步，可继续通过剧情正文回看当前选中节点。
+          </p>
+        ) : null}
       </div>
     </section>
   );
@@ -429,11 +439,13 @@ function PreferenceList({ state }: { state: StoryState }) {
 }
 
 function InfoList({ title, items }: { title: string; items: string[] }) {
+  const latestItems = items.slice(-6).reverse();
+
   return (
     <div className="mt-5">
       <p className="text-sm font-semibold text-amber-200">{title}</p>
       <div className="mt-2 flex flex-wrap gap-2">
-        {items.map((item) => (
+        {latestItems.map((item) => (
           <span
             className="rounded-full border border-amber-200/15 px-3 py-1 text-sm text-stone-300"
             key={item}
@@ -442,6 +454,11 @@ function InfoList({ title, items }: { title: string; items: string[] }) {
           </span>
         ))}
       </div>
+      {items.length > latestItems.length ? (
+        <p className="mt-2 text-xs text-stone-500">
+          已隐藏较早的 {items.length - latestItems.length} 项
+        </p>
+      ) : null}
     </div>
   );
 }
