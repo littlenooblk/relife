@@ -2,9 +2,11 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
+  TARGET_STORY_TURNS,
   StoryResponse,
   StoryState,
   createNewLife,
+  getTopPreferences,
 } from "@/lib/game";
 
 const SAVE_KEY = "relife:three-kingdoms-save";
@@ -360,9 +362,13 @@ function MemoryCard({
   return (
     <section className="rounded-3xl border border-amber-200/15 bg-stone-950/70 p-5">
       <h2 className="text-xl font-bold text-amber-50">人生痕迹</h2>
+      <p className="mt-2 text-sm leading-6 text-stone-400">
+        当前第 {state.history.length} / {TARGET_STORY_TURNS} 步，通常约一小时完成一生。
+      </p>
       <InfoList title="关系" items={state.relationships} />
       <InfoList title="特质" items={state.traits} />
       <InfoList title="资源" items={state.inventory} />
+      <PreferenceList state={state} />
       <div className="mt-5">
         <p className="text-sm font-semibold text-amber-200">经历目录</p>
         <ol className="mt-2 space-y-2 text-sm leading-6 text-stone-300">
@@ -393,6 +399,32 @@ function MemoryCard({
         </ol>
       </div>
     </section>
+  );
+}
+
+function PreferenceList({ state }: { state: StoryState }) {
+  const preferences = getTopPreferences(state.intentProfile);
+
+  return (
+    <div className="mt-5">
+      <p className="text-sm font-semibold text-amber-200">玩家偏好</p>
+      {preferences.length > 0 ? (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {preferences.map((preference) => (
+            <span
+              className="rounded-full border border-emerald-200/15 px-3 py-1 text-sm text-emerald-100"
+              key={preference.key}
+            >
+              {preference.label} {preference.score}
+            </span>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-2 text-sm leading-6 text-stone-500">
+          还没有明显偏好，会根据后续选择逐渐识别。
+        </p>
+      )}
+    </div>
   );
 }
 
