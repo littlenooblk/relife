@@ -6,12 +6,11 @@ import {
   ENDING_SOON_TURN,
   MAX_STORY_TURNS,
   MIN_STORY_TURNS,
+  PersonaDeltas,
+  applyPersonaDeltas,
   advanceProfileTime,
   createMockStoryResponse,
-  describeIntentProfile,
   describePersonaProfile,
-  updatePersonaProfile,
-  updateIntentProfile,
 } from "./game";
 import {
   HISTORICAL_CONTEXT,
@@ -41,6 +40,7 @@ type LlmStoryPayload = {
   relationships?: string[];
   traits?: string[];
   inventory?: string[];
+  personaDeltas?: PersonaDeltas;
   choices: StoryChoice[];
   risk: string;
   isGameOver?: boolean;
@@ -74,8 +74,8 @@ function buildSystemPrompt() {
   return `你是一个严谨的三国时期人生模拟游戏叙事引擎。
 
 必须遵守：
-1. 只叙述公元184年至280年的中国相关地区。
-2. 地理、交通、政权归属和社会身份必须符合三国时期大体事实。
+1. 出生与主要时代背景从汉末到三国前中期开始；如果玩家人生自然延续到 280 年之后，可以写西晋初年和三国余波，不要因为 280 年机械终止人生。
+2. 地理、交通、政权归属和社会身份必须符合对应年份的大体事实。
 3. 玩家可以影响自己、家庭、乡里、军府或地方层面的命运，但不能轻易改变重大历史结局。
 4. 叙事必须保持玩家第一视角代入感：使用第二人称“你”，只写玩家当下能看见、听见、感到、推测或事后得知的信息。
 5. 每次返回的节点必须是“人生重大转折点”，不是日常事务。小的奔走、谈话、经营、疾病恢复、家中争执、差役来往等细节由你自动写进 narrative，不要让玩家逐件选择。
@@ -83,12 +83,11 @@ function buildSystemPrompt() {
 7. 如果玩家角色死亡或人生已经结束，必须直接、克制地收束，不要拖沓，不要再安排新的冒险。
 8. 一局游戏应在 16 到 32 个重大转折点内完成完整人生。第 16 个节点之后，可以根据剧情自然收束；第 32 个节点前后必须结束，避免无限铺陈。
 9. 不要只写官场风险。人生节点必须轮换覆盖亲情、婚姻、爱情、伦理困境、宗族责任、养育、疾病、饥荒、迁徙、财产、师友、仇怨、信义与生死。
-10. 必须识别并迎合玩家的长期偏好：如果玩家反复保护家人，就增加亲族、婚姻、子女和家业线；如果玩家追求权势，就增加仕途、军功、名声与代价；如果玩家追求自由，就增加迁徙、隐居和摆脱束缚的机会。
-11. 迎合偏好不等于无条件奖励。要让玩家偏好的路线更常出现、更有戏剧重量，同时保留合理代价。
-12. 角色形象六维会影响剧情发展：仁德高者更容易得到托付和民心，也更常遇到牺牲困境；谋略高者更容易看到暗线和布局；勇武高者会得到战事机会也更易受伤；魅力高者更容易牵动爱情、盟友与人心；名望高者会被举荐、嫉恨或政治利用；资财高者能经营家业也会引来索取和掠夺。
-13. 禁止上帝视角：不要提前剧透未来历史结局，不要直接揭示其他人物未表露的隐秘动机，不要写“你不知道的是”“多年后史书记载”“此举将注定”等跳出玩家体验的句子。历史背景只能作为玩家可感知的时局、传闻、官府告示、亲友讲述或事后回望。
-14. 语言要有沉浸感和身体感：可以写饥饿、寒暑、道路、气味、家人的神情、城邑声音、选择前的犹豫，但不要堆砌宏大总结。
-15. 不玄幻，不出现现代物品。只返回 JSON，不要 Markdown，不要额外解释。
+10. 角色形象六维会影响剧情发展：仁德高者更容易得到托付和民心，也更常遇到牺牲困境；谋略高者更容易看到暗线和布局；勇武高者会得到战事机会也更易受伤；魅力高者更容易牵动爱情、盟友与人心；名望高者会被举荐、嫉恨或政治利用；资财高者能经营家业也会引来索取和掠夺。
+11. 每次必须根据玩家本次选择和剧情结果判断角色形象六维变化，返回 personaDeltas。变化量可以为负数，必须体现取舍，不要所有维度都上涨。
+12. 禁止上帝视角：不要提前剧透未来历史结局，不要直接揭示其他人物未表露的隐秘动机，不要写“你不知道的是”“多年后史书记载”“此举将注定”等跳出玩家体验的句子。历史背景只能作为玩家可感知的时局、传闻、官府告示、亲友讲述或事后回望。
+13. 语言要有沉浸感和身体感：可以写饥饿、寒暑、道路、气味、家人的神情、城邑声音、选择前的犹豫，但不要堆砌宏大总结。
+14. 不玄幻，不出现现代物品。只返回 JSON，不要 Markdown，不要额外解释。
 
 JSON 格式：
 {
@@ -100,6 +99,14 @@ JSON 格式：
   "relationships": ["完整的最新重要关系列表，至少包含现有关系，并按本次剧情增删改"],
   "traits": ["完整的最新人物特质列表，按本次剧情增删改"],
   "inventory": ["完整的最新重要随身物或资源列表，按本次剧情增删改"],
+  "personaDeltas": {
+    "benevolence": 0,
+    "strategy": 0,
+    "martial": 0,
+    "charisma": 0,
+    "reputation": 0,
+    "wealth": 0
+  },
   "choices": [
     {"id":"choice-1","label":"推荐选择文本","intent":"这个选择的真实意图"},
     {"id":"choice-2","label":"推荐选择文本","intent":"这个选择的真实意图"},
@@ -114,6 +121,8 @@ JSON 格式：
 - 每个节点应自动推进数月到数年，并在 narrative 中交代期间重要变化。
 - 早期节点通常推进数月到两年；中期推进一到四年；后期必须明显加速，允许一次跨过多年。
 - 每次返回的 relationships、traits、inventory 都必须反映本次行动造成的状态变化；不要机械重复旧数组。
+- personaDeltas 每个维度范围为 -12 到 12 的整数。只根据本次选择与剧情结果判断变化；可以全为 0，但如果选择有明显代价或成长，应有正负变化。
+- personaDeltas 六个字段含义：benevolence=仁德，strategy=谋略，martial=勇武，charisma=魅力，reputation=名望，wealth=资财。
 - 如果角色死亡，isGameOver 返回 true，narrative 控制在 80 到 160 字，choices 返回空数组，risk 用一句话交代死因或结局代价。
 - 前 16 个节点以内，除非角色死亡，不要草率结束一生。第 16 个节点之后，若剧情长期后果已经成熟，可以自然结束。第 32 个节点前后必须结束这一生，isGameOver 返回 true。
 
@@ -141,10 +150,7 @@ function buildUserPrompt(request: StoryRequest) {
 - 关系：${state.relationships.join("、")}
 - 特质：${state.traits.join("、")}
 - 物品/资源：${state.inventory.join("、")}
-- 玩家偏好画像：${describeIntentProfile(state.intentProfile)}
-- 最近意图标签：${state.intentProfile?.recentIntents.join("、") || "暂无"}
 - 当前角色形象：${describePersonaProfile(state.personaProfile)}
-- 本次选择后的形象倾向：${describePersonaProfile(updatePersonaProfile(state.personaProfile, action, state.intentProfile))}
 - 当前节点：第${turnCount}步，完整人生应在第${MIN_STORY_TURNS}到第${MAX_STORY_TURNS}步之间结束
 - 节奏阶段：${getPacingStage(turnCount, state.profile.age)}
 - 本节点建议主题：${getThemeGuidance(turnCount)}
@@ -214,6 +220,7 @@ function parseStoryPayload(content: string): LlmStoryPayload {
     relationships: parsed.relationships,
     traits: parsed.traits,
     inventory: parsed.inventory,
+    personaDeltas: normalizePersonaDeltas(parsed.personaDeltas),
     choices: parsed.isGameOver
       ? []
       : parsed.choices.slice(0, 4).map((choice, index) => ({
@@ -226,6 +233,31 @@ function parseStoryPayload(content: string): LlmStoryPayload {
   };
 }
 
+function normalizePersonaDeltas(
+  deltas: PersonaDeltas | undefined,
+): PersonaDeltas {
+  if (!deltas) {
+    return {};
+  }
+
+  return {
+    benevolence: clampOptionalDelta(deltas.benevolence),
+    strategy: clampOptionalDelta(deltas.strategy),
+    martial: clampOptionalDelta(deltas.martial),
+    charisma: clampOptionalDelta(deltas.charisma),
+    reputation: clampOptionalDelta(deltas.reputation),
+    wealth: clampOptionalDelta(deltas.wealth),
+  };
+}
+
+function clampOptionalDelta(value: number | undefined) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return 0;
+  }
+
+  return clampNumber(value, -12, 12);
+}
+
 function normalizePacing(
   request: StoryRequest,
   payload: LlmStoryPayload,
@@ -233,7 +265,7 @@ function normalizePacing(
   const turnCount = request.state.history.length;
   const shouldForceEnding =
     turnCount >= MAX_STORY_TURNS - 1 ||
-    (turnCount >= MIN_STORY_TURNS && request.state.profile.age >= 70);
+    (turnCount >= MIN_STORY_TURNS && request.state.profile.age >= 75);
   const shouldSuppressEarlyEnding =
     payload.isGameOver &&
     turnCount < MIN_STORY_TURNS - 1 &&
@@ -295,14 +327,9 @@ function applyLlmPayload(
     chosenAction: request.action,
     isEnding: payload.isGameOver,
   };
-  const intentProfile = updateIntentProfile(
-    request.state.intentProfile,
-    request.action,
-  );
-  const personaProfile = updatePersonaProfile(
+  const personaProfile = applyPersonaDeltas(
     request.state.personaProfile,
-    request.action,
-    request.state.intentProfile,
+    payload.personaDeltas,
   );
 
   return {
@@ -320,7 +347,6 @@ function applyLlmPayload(
       inventory: mergeStrings(request.state.inventory, payload.inventory),
       history: [...request.state.history, turn],
       isGameOver: payload.isGameOver || request.state.isGameOver,
-      intentProfile,
       personaProfile,
     },
   };
