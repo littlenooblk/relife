@@ -255,7 +255,9 @@ export default function Home() {
                       className="rounded-2xl border border-amber-200/15 bg-amber-50/5 p-4 text-left transition hover:border-amber-200/45 hover:bg-amber-100/10 disabled:cursor-not-allowed disabled:opacity-50"
                       disabled={isLoading}
                       key={choice.id}
-                      onClick={() => submitAction(choice.intent)}
+                      onClick={() =>
+                        submitAction(`${choice.label}；真实意图：${choice.intent}`)
+                      }
                       type="button"
                     >
                       <span className="block font-semibold text-amber-100">
