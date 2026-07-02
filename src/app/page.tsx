@@ -53,12 +53,40 @@ export default function Home() {
     localStorage.setItem(SAVE_KEY, JSON.stringify(save));
   }, [selectedTurnIndex, state]);
 
-  function startNewLife() {
-    setState(createNewLife());
-    setSelectedTurnIndex(0);
-    setCustomAction("");
+  async function startNewLife() {
+    setIsLoading(true);
     setError("");
-    setSavedGame(null);
+
+    try {
+      const response = await fetch("/api/new-life", {
+        method: "POST",
+      });
+      const data = (await response.json()) as {
+        state?: StoryState;
+        error?: string;
+      };
+
+      if (!response.ok || !data.state) {
+        throw new Error(data.error || "开局生成失败");
+      }
+
+      setState(data.state);
+      setSelectedTurnIndex(0);
+      setCustomAction("");
+      setSavedGame(null);
+    } catch (err) {
+      setState(createNewLife());
+      setSelectedTurnIndex(0);
+      setCustomAction("");
+      setSavedGame(null);
+      setError(
+        err instanceof Error
+          ? `大模型开局生成失败，已使用本地随机开局：${err.message}`
+          : "大模型开局生成失败，已使用本地随机开局。",
+      );
+    } finally {
+      setIsLoading(false);
+    }
   }
 
   function continueSavedGame() {
@@ -148,7 +176,7 @@ export default function Home() {
             onClick={startNewLife}
             type="button"
           >
-            {state ? "重开一生" : "开始新人生"}
+            {isLoading ? "生成中..." : state ? "重开一生" : "开始新人生"}
           </button>
         </header>
 
@@ -163,6 +191,7 @@ export default function Home() {
             <aside className="space-y-4">
               <ProfileCard state={state} />
               <PersonaRadarCard state={state} />
+              <WorldStateCard state={state} />
               <MemoryCard
                 selectedTurnIndex={selectedTurnIndex}
                 setSelectedTurnIndex={setSelectedTurnIndex}
@@ -330,6 +359,7 @@ function ProfileCard({ state }: { state: StoryState }) {
     ],
     ["区域", profile.birthPlace.region],
     ["出身", profile.socialClass],
+    ["家世", profile.familyBackground || profile.socialClass],
     ["当前大势", profile.faction],
   ];
 
@@ -346,6 +376,42 @@ function ProfileCard({ state }: { state: StoryState }) {
           </div>
         ))}
       </dl>
+    </section>
+  );
+}
+
+function WorldStateCard({ state }: { state: StoryState }) {
+  const worldState = state.worldState;
+
+  return (
+    <section className="rounded-3xl border border-amber-200/15 bg-stone-950/70 p-5">
+      <h2 className="text-xl font-bold text-amber-50">世界线</h2>
+      <div className="mt-3 space-y-3 text-sm leading-6 text-stone-300">
+        <p>
+          {worldState?.alternateHistory
+            ? "本局历史已经偏离史实。"
+            : worldState?.canInfluenceHistory
+              ? "你已具备影响重大历史走势的能力。"
+              : "你暂时还无法影响重大历史走势。"}
+        </p>
+        <p className="text-stone-400">
+          {worldState?.divergenceSummary ||
+            worldState?.influenceReason ||
+            "你目前影响的是自己、家庭与身边人的命运。"}
+        </p>
+        {worldState?.changedEvents?.length ? (
+          <div className="flex flex-wrap gap-2">
+            {worldState.changedEvents.slice(-4).map((event) => (
+              <span
+                className="rounded-full border border-purple-200/20 px-3 py-1 text-purple-100"
+                key={event}
+              >
+                {event}
+              </span>
+            ))}
+          </div>
+        ) : null}
+      </div>
     </section>
   );
 }
@@ -517,7 +583,7 @@ function MemoryCard({
 }
 
 function InfoList({ title, items }: { title: string; items: string[] }) {
-  const latestItems = items.slice(-6).reverse();
+  const latestItems = items.slice(0, 6);
 
   return (
     <div className="mt-5">

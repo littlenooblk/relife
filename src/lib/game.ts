@@ -16,6 +16,7 @@ export type PlayerProfile = {
   age: number;
   faction: Faction;
   socialClass: string;
+  familyBackground: string;
 };
 
 export type StoryChoice = {
@@ -36,6 +37,14 @@ export type PersonaProfile = Record<PersonaKey, number>;
 
 export type PersonaDeltas = Partial<Record<PersonaKey, number>>;
 
+export type WorldState = {
+  canInfluenceHistory: boolean;
+  alternateHistory: boolean;
+  influenceReason: string;
+  divergenceSummary: string;
+  changedEvents: string[];
+};
+
 export type StoryState = {
   profile: PlayerProfile;
   currentLocation: string;
@@ -45,6 +54,7 @@ export type StoryState = {
   history: StoryTurn[];
   isGameOver: boolean;
   personaProfile: PersonaProfile;
+  worldState: WorldState;
 };
 
 export type StoryTurn = {
@@ -124,6 +134,7 @@ export function createNewLife(): StoryState {
   const birthMonth = randomInt(1, 12);
   const birthPlace = pickRandom(BIRTH_PLACES);
   const socialClass = pickRandom(SOCIAL_CLASSES);
+  const familyBackground = `${socialClass}，在${birthPlace.name}附近靠宗族、手艺或田地维持生计`;
   const age = randomInt(12, 18);
   const currentYear = birthYear + age;
   const currentMonth = randomInt(1, 12);
@@ -138,6 +149,7 @@ export function createNewLife(): StoryState {
     age: calculateAge(birthYear, birthMonth, currentYear, currentMonth),
     faction: getFactionForYearAndPlace(currentYear, birthPlace),
     socialClass,
+    familyBackground,
   };
 
   const state: StoryState = {
@@ -149,6 +161,7 @@ export function createNewLife(): StoryState {
     history: [],
     isGameOver: false,
     personaProfile: createInitialPersonaProfile(socialClass),
+    worldState: createInitialWorldState(),
   };
 
   const openingTurn = createOpeningTurn(state);
@@ -254,15 +267,16 @@ export function createMockStoryResponse(request: StoryRequest): StoryResponse {
         ...advancedProfile,
         faction,
       },
-      relationships: unique([
-        ...request.state.relationships,
+      relationships: latestUnique([
         "一位留意你的地方掾吏",
+        ...request.state.relationships,
       ]),
-      traits: unique([...request.state.traits, "知机"]),
-      inventory: unique([...request.state.inventory, newResource]),
+      traits: latestUnique(["知机", ...request.state.traits]),
+      inventory: latestUnique([newResource, ...request.state.inventory]),
       history: [...request.state.history, turn],
       isGameOver: shouldEnd,
       personaProfile: request.state.personaProfile,
+      worldState: request.state.worldState ?? createInitialWorldState(),
     },
   };
 }
@@ -300,6 +314,16 @@ export function createInitialPersonaProfile(socialClass: string): PersonaProfile
   }
 
   return clampPersonaProfile(profile);
+}
+
+export function createInitialWorldState(): WorldState {
+  return {
+    canInfluenceHistory: false,
+    alternateHistory: false,
+    influenceReason: "你还只是乱世中的普通人，能改变的是自己、家庭与乡里。",
+    divergenceSummary: "",
+    changedEvents: [],
+  };
 }
 
 export function getPersonaDimensions(profile: PersonaProfile | undefined) {
@@ -353,8 +377,10 @@ function pickRandom<T>(items: T[]): T {
   return items[Math.floor(Math.random() * items.length)];
 }
 
-function unique(items: string[]) {
-  return Array.from(new Set(items));
+function latestUnique(items: string[]) {
+  return Array.from(
+    new Set(items.filter((item) => typeof item === "string" && item.trim())),
+  ).slice(0, 12);
 }
 
 function clampPersonaProfile(profile: PersonaProfile): PersonaProfile {

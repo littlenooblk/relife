@@ -2,17 +2,26 @@ import {
   StoryChoice,
   StoryRequest,
   StoryResponse,
+  StoryState,
   StoryTurn,
   ENDING_SOON_TURN,
   MAX_STORY_TURNS,
   MIN_STORY_TURNS,
   PersonaDeltas,
+  PERSONA_KEYS,
+  PersonaProfile,
+  WorldState,
   applyPersonaDeltas,
   advanceProfileTime,
+  createInitialPersonaProfile,
+  createInitialWorldState,
+  createNewLife,
   createMockStoryResponse,
   describePersonaProfile,
 } from "./game";
 import {
+  BirthPlace,
+  Faction,
   HISTORICAL_CONTEXT,
   describePlace,
   getFactionForYearAndPlace,
@@ -41,10 +50,33 @@ type LlmStoryPayload = {
   traits?: string[];
   inventory?: string[];
   personaDeltas?: PersonaDeltas;
+  worldState?: Partial<WorldState>;
   choices: StoryChoice[];
   risk: string;
   isGameOver?: boolean;
 };
+
+type LlmOpeningPayload = {
+  birthYear: number;
+  birthMonth: number;
+  birthPlace: BirthPlace;
+  currentAge: number;
+  currentMonth: number;
+  currentDay: number;
+  socialClass: string;
+  familyBackground: string;
+  relationships: string[];
+  traits: string[];
+  inventory: string[];
+  personaProfile?: Partial<PersonaProfile>;
+  title: string;
+  narrative: string;
+  historicalContext: string;
+  choices: StoryChoice[];
+  risk: string;
+};
+
+const FACTIONS: Faction[] = ["曹魏", "蜀汉", "东吴", "群雄割据", "边郡部族"];
 
 export async function generateStoryTurn(
   request: StoryRequest,
@@ -55,7 +87,7 @@ export async function generateStoryTurn(
 
   const payload = normalizePacing(
     request,
-    await callOpenAiCompatibleApi([
+    parseStoryPayload(await callOpenAiCompatibleApi([
     {
       role: "system",
       content: buildSystemPrompt(),
@@ -64,10 +96,30 @@ export async function generateStoryTurn(
       role: "user",
       content: buildUserPrompt(request),
     },
-    ]),
+    ])),
   );
 
   return applyLlmPayload(request, payload);
+}
+
+export async function generateOpeningLife(): Promise<StoryState> {
+  if (!process.env.LLM_API_KEY) {
+    return createNewLife();
+  }
+
+  const payload = await callOpenAiCompatibleApi([
+    {
+      role: "system",
+      content: buildOpeningSystemPrompt(),
+    },
+    {
+      role: "user",
+      content:
+        "请为一局新游戏生成一个高随机性的三国前中期开局，包括出生信息、家庭背景、初始关系、性格、资源、角色六维和第一组重大人生选择。",
+    },
+  ]);
+
+  return createStateFromOpeningPayload(parseOpeningPayload(payload));
 }
 
 function buildSystemPrompt() {
@@ -76,7 +128,7 @@ function buildSystemPrompt() {
 必须遵守：
 1. 出生与主要时代背景从汉末到三国前中期开始；如果玩家人生自然延续到 280 年之后，可以写西晋初年和三国余波，不要因为 280 年机械终止人生。
 2. 地理、交通、政权归属和社会身份必须符合对应年份的大体事实。
-3. 玩家可以影响自己、家庭、乡里、军府或地方层面的命运，但不能轻易改变重大历史结局。
+3. 在 worldState.canInfluenceHistory 为 false 时，玩家主要影响自己、家庭、乡里、军府或地方层面的命运，重大历史事件遵循史实；当 worldState.canInfluenceHistory 为 true 后，玩家可以尝试影响重大历史事件；当 worldState.alternateHistory 为 true 后，本局可以进入架空历史，不必再严格遵循原历史结局，但仍要保持地理、社会和因果合理。
 4. 叙事必须保持玩家第一视角代入感：使用第二人称“你”，只写玩家当下能看见、听见、感到、推测或事后得知的信息。
 5. 每次返回的节点必须是“人生重大转折点”，不是日常事务。小的奔走、谈话、经营、疾病恢复、家中争执、差役来往等细节由你自动写进 narrative，不要让玩家逐件选择。
 6. 推荐选项必须是会改变余生方向的重大选择，且彼此方向明显不同，例如婚姻/家族、迁徙/冒险、仕途/军功、归隐/守成、道义/生存之间的取舍。
@@ -107,6 +159,13 @@ JSON 格式：
     "reputation": 0,
     "wealth": 0
   },
+  "worldState": {
+    "canInfluenceHistory": false,
+    "alternateHistory": false,
+    "influenceReason": "判断玩家当前是否已经有能力影响重大历史走势，以及原因",
+    "divergenceSummary": "如果已经进入架空历史，概括本局已经改变的历史走势",
+    "changedEvents": ["本局已经改变或可能改变的重大事件"]
+  },
   "choices": [
     {"id":"choice-1","label":"推荐选择文本","intent":"这个选择的真实意图"},
     {"id":"choice-2","label":"推荐选择文本","intent":"这个选择的真实意图"},
@@ -123,6 +182,7 @@ JSON 格式：
 - 每次返回的 relationships、traits、inventory 都必须反映本次行动造成的状态变化；不要机械重复旧数组。
 - personaDeltas 每个维度范围为 -12 到 12 的整数。只根据本次选择与剧情结果判断变化；可以全为 0，但如果选择有明显代价或成长，应有正负变化。
 - personaDeltas 六个字段含义：benevolence=仁德，strategy=谋略，martial=勇武，charisma=魅力，reputation=名望，wealth=资财。
+- 每次都要判断 worldState：玩家是否已经拥有足够地位、资源、军力、名望或情报网络来影响世界线。没有能力时，重大历史事件仍遵循史实；有能力后，可以让本局历史被改变，并在 alternateHistory 和 divergenceSummary 中记录。
 - 如果角色死亡，isGameOver 返回 true，narrative 控制在 80 到 160 字，choices 返回空数组，risk 用一句话交代死因或结局代价。
 - 前 16 个节点以内，除非角色死亡，不要草率结束一生。第 16 个节点之后，若剧情长期后果已经成熟，可以自然结束。第 32 个节点前后必须结束这一生，isGameOver 返回 true。
 
@@ -151,6 +211,7 @@ function buildUserPrompt(request: StoryRequest) {
 - 特质：${state.traits.join("、")}
 - 物品/资源：${state.inventory.join("、")}
 - 当前角色形象：${describePersonaProfile(state.personaProfile)}
+- 世界线状态：${describeWorldState(state.worldState)}
 - 当前节点：第${turnCount}步，完整人生应在第${MIN_STORY_TURNS}到第${MAX_STORY_TURNS}步之间结束
 - 节奏阶段：${getPacingStage(turnCount, state.profile.age)}
 - 本节点建议主题：${getThemeGuidance(turnCount)}
@@ -163,6 +224,61 @@ ${recentHistory || "暂无"}
 ${action}
 
 请生成下一段人生重大转折点。先自动写完这次选择之后玩家亲身经历或合理得知的中间人生剧情和小变动，再把玩家带到下一个必须亲自决定的大关口。不要让玩家选择琐碎细节，不要使用上帝视角。`;
+}
+
+function buildOpeningSystemPrompt() {
+  return `你是三国人生游戏的开局生成器。
+
+目标：生成一个极具随机性但历史地理合理的开局。不要使用固定模板，不要总是士族、农户、军户；可以有孤儿、赘婿、流民、医家、巫祝旁支、船户、盐户、边郡混血家庭、被收养者、商队遗孤、地方豪强庶支等合理身份。
+
+必须遵守：
+1. 出生年份必须在公元184年至225年之间，地点必须在当时中国相关区域内。
+2. 家庭背景要具体，包含家庭结构、经济状态、地方处境、至少一个牵挂或隐患。
+3. 第一组 choices 必须由你生成，且都是重大人生方向，不是日常小事。
+4. narrative 使用第二人称“你”，只写玩家可感知的信息，不要上帝视角。
+5. 只返回 JSON。
+
+JSON 格式：
+{
+  "birthYear": 196,
+  "birthMonth": 4,
+  "birthPlace": {
+    "name": "地点名",
+    "presentDay": "今地名",
+    "region": "当时州郡或地域",
+    "factionHints": ["群雄割据"],
+    "geography": "地理与交通",
+    "socialTexture": "地方社会气质"
+  },
+  "currentAge": 14,
+  "currentMonth": 9,
+  "currentDay": 12,
+  "socialClass": "具体出身标签",
+  "familyBackground": "80到160字家庭背景",
+  "relationships": ["初始重要关系"],
+  "traits": ["初始性格或处境标签"],
+  "inventory": ["初始重要资源"],
+  "personaProfile": {
+    "benevolence": 45,
+    "strategy": 45,
+    "martial": 45,
+    "charisma": 45,
+    "reputation": 35,
+    "wealth": 30
+  },
+  "title": "开局标题",
+  "narrative": "220到420字开局剧情",
+  "historicalContext": "80到180字玩家可感知的历史地理背景",
+  "choices": [
+    {"id":"choice-1","label":"重大选择","intent":"真实意图"},
+    {"id":"choice-2","label":"重大选择","intent":"真实意图"},
+    {"id":"choice-3","label":"重大选择","intent":"真实意图"}
+  ],
+  "risk": "当前最重要风险"
+}
+
+内置历史上下文：
+${HISTORICAL_CONTEXT}`;
 }
 
 async function callOpenAiCompatibleApi(messages: LlmMessage[]) {
@@ -194,7 +310,7 @@ async function callOpenAiCompatibleApi(messages: LlmMessage[]) {
     throw new Error("LLM API 未返回内容");
   }
 
-  return parseStoryPayload(content);
+  return content;
 }
 
 function parseStoryPayload(content: string): LlmStoryPayload {
@@ -221,6 +337,7 @@ function parseStoryPayload(content: string): LlmStoryPayload {
     traits: parsed.traits,
     inventory: parsed.inventory,
     personaDeltas: normalizePersonaDeltas(parsed.personaDeltas),
+    worldState: parsed.worldState,
     choices: parsed.isGameOver
       ? []
       : parsed.choices.slice(0, 4).map((choice, index) => ({
@@ -231,6 +348,135 @@ function parseStoryPayload(content: string): LlmStoryPayload {
     risk: parsed.risk,
     isGameOver: Boolean(parsed.isGameOver),
   };
+}
+
+function parseOpeningPayload(content: string): LlmOpeningPayload {
+  const parsed = JSON.parse(content) as Partial<LlmOpeningPayload>;
+
+  if (
+    !parsed.birthPlace ||
+    !parsed.socialClass ||
+    !parsed.familyBackground ||
+    !parsed.title ||
+    !parsed.narrative ||
+    !parsed.historicalContext ||
+    !Array.isArray(parsed.choices) ||
+    parsed.choices.length < 2
+  ) {
+    throw new Error("LLM 返回的开局 JSON 缺少必要字段");
+  }
+
+  return {
+    birthYear: clampNumber(parsed.birthYear ?? 196, 184, 225),
+    birthMonth: clampNumber(parsed.birthMonth ?? 1, 1, 12),
+    birthPlace: normalizeBirthPlace(parsed.birthPlace),
+    currentAge: clampNumber(parsed.currentAge ?? 14, 8, 22),
+    currentMonth: clampNumber(parsed.currentMonth ?? 1, 1, 12),
+    currentDay: clampNumber(parsed.currentDay ?? 1, 1, 28),
+    socialClass: parsed.socialClass.slice(0, 40),
+    familyBackground: parsed.familyBackground.slice(0, 220),
+    relationships: normalizeStringList(parsed.relationships, ["家人"]),
+    traits: normalizeStringList(parsed.traits, ["未定之人"]),
+    inventory: normalizeStringList(parsed.inventory, ["粗布衣"]),
+    personaProfile: parsed.personaProfile,
+    title: parsed.title,
+    narrative: parsed.narrative,
+    historicalContext: parsed.historicalContext,
+    choices: parsed.choices.slice(0, 4).map((choice, index) => ({
+      id: choice.id || `opening-${index + 1}`,
+      label: choice.label,
+      intent: choice.intent || choice.label,
+    })),
+    risk: parsed.risk || "乱世中，家人、粮食与身份都可能在一夜之间失去。",
+  };
+}
+
+function createStateFromOpeningPayload(payload: LlmOpeningPayload): StoryState {
+  const currentYear = payload.birthYear + payload.currentAge;
+  const faction = getFactionForYearAndPlace(currentYear, payload.birthPlace);
+  const personaProfile = normalizePersonaProfile(
+    createInitialPersonaProfile(payload.socialClass),
+    payload.personaProfile,
+  );
+
+  const state: StoryState = {
+    profile: {
+      birthYear: payload.birthYear,
+      birthMonth: payload.birthMonth,
+      birthPlace: payload.birthPlace,
+      currentYear,
+      currentMonth: payload.currentMonth,
+      currentDay: payload.currentDay,
+      age: payload.currentAge,
+      faction,
+      socialClass: payload.socialClass,
+      familyBackground: payload.familyBackground,
+    },
+    currentLocation: payload.birthPlace.name,
+    relationships: payload.relationships,
+    traits: payload.traits,
+    inventory: payload.inventory,
+    history: [],
+    isGameOver: false,
+    personaProfile,
+    worldState: createInitialWorldState(),
+  };
+
+  return {
+    ...state,
+    history: [
+      {
+        year: currentYear,
+        month: payload.currentMonth,
+        day: payload.currentDay,
+        age: payload.currentAge,
+        title: payload.title,
+        narrative: payload.narrative,
+        historicalContext: payload.historicalContext,
+        choices: payload.choices,
+        risk: payload.risk,
+        isEnding: false,
+      },
+    ],
+  };
+}
+
+function normalizeBirthPlace(place: BirthPlace): BirthPlace {
+  const factionHints = Array.isArray(place.factionHints)
+    ? place.factionHints.filter((faction): faction is Faction =>
+        FACTIONS.includes(faction as Faction),
+      )
+    : [];
+
+  return {
+    name: String(place.name || "无名郡县").slice(0, 30),
+    presentDay: String(place.presentDay || "今地不详").slice(0, 40),
+    region: String(place.region || "州郡不详").slice(0, 30),
+    factionHints: factionHints.length > 0 ? factionHints : ["群雄割据"],
+    geography: String(place.geography || "地处乱世交通要道附近。").slice(0, 180),
+    socialTexture: String(place.socialTexture || "地方豪强、流民与郡县小吏往来混杂。").slice(0, 180),
+  };
+}
+
+function normalizePersonaProfile(
+  fallback: PersonaProfile,
+  incoming?: Partial<PersonaProfile>,
+): PersonaProfile {
+  return PERSONA_KEYS.reduce((profile, key) => {
+    profile[key] = clampNumber(incoming?.[key] ?? fallback[key], 0, 100);
+    return profile;
+  }, {} as PersonaProfile);
+}
+
+function normalizeStringList(value: string[] | undefined, fallback: string[]) {
+  if (!Array.isArray(value) || value.length === 0) {
+    return fallback;
+  }
+
+  return value
+    .filter((item) => typeof item === "string" && item.trim())
+    .map((item) => item.trim().slice(0, 40))
+    .slice(0, 8);
 }
 
 function normalizePersonaDeltas(
@@ -348,6 +594,7 @@ function applyLlmPayload(
       history: [...request.state.history, turn],
       isGameOver: payload.isGameOver || request.state.isGameOver,
       personaProfile,
+      worldState: mergeWorldState(request.state.worldState, payload.worldState),
     },
   };
 }
@@ -361,7 +608,62 @@ function clampNumber(value: number, min: number, max: number) {
 }
 
 function mergeStrings(existing: string[], incoming?: string[]) {
-  return Array.from(new Set([...existing, ...(incoming || [])])).slice(0, 12);
+  const normalizedIncoming = (incoming || [])
+    .filter((item) => typeof item === "string" && item.trim())
+    .map((item) => item.trim());
+  const normalizedExisting = existing
+    .filter((item) => typeof item === "string" && item.trim())
+    .map((item) => item.trim());
+
+  return Array.from(new Set([...normalizedIncoming, ...normalizedExisting])).slice(
+    0,
+    12,
+  );
+}
+
+function describeWorldState(worldState: WorldState | undefined) {
+  const state = worldState ?? createInitialWorldState();
+
+  if (state.alternateHistory) {
+    return `已进入架空历史。${state.divergenceSummary || state.influenceReason}`;
+  }
+
+  if (state.canInfluenceHistory) {
+    return `具备影响世界线的能力。${state.influenceReason}`;
+  }
+
+  return `尚未能影响重大历史走势。${state.influenceReason}`;
+}
+
+function mergeWorldState(
+  existing: WorldState | undefined,
+  incoming: Partial<WorldState> | undefined,
+): WorldState {
+  const base = existing ?? createInitialWorldState();
+
+  if (!incoming) {
+    return base;
+  }
+
+  const canInfluenceHistory =
+    Boolean(incoming.canInfluenceHistory) || base.canInfluenceHistory;
+  const alternateHistory =
+    Boolean(incoming.alternateHistory) || base.alternateHistory;
+
+  return {
+    canInfluenceHistory,
+    alternateHistory,
+    influenceReason:
+      incoming.influenceReason || base.influenceReason || createInitialWorldState().influenceReason,
+    divergenceSummary:
+      incoming.divergenceSummary || base.divergenceSummary || "",
+    changedEvents: Array.from(
+      new Set([
+        ...(base.changedEvents || []),
+        ...normalizeStringList(incoming.changedEvents, []),
+      ]),
+    ).slice(-8),
+  };
 }
 
 function createContinuationChoices(request: StoryRequest): StoryChoice[] {
